@@ -39,16 +39,6 @@ streamlit run app.py
 
 App opens at `http://localhost:8501`.
 
-## ☁️ Deploy to Streamlit Cloud (free)
-
-1. Push this repo to your GitHub.
-2. Go to https://share.streamlit.io → **Create app** → pick the repo, branch `main`, file `app.py`.
-3. **Advanced settings → Secrets** — add:
-   ```toml
-   GROQ_API_KEY = "gsk_..."
-   ```
-4. Deploy.
-
 ## 📊 Evaluation
 
 ```bash
@@ -56,22 +46,6 @@ python eval.py path/to/test.pdf
 ```
 
 Runs a golden-set evaluation against the PDF — reports retrieval accuracy and answer keyword hits. Edit `GOLDEN_SET` in `eval.py` to match your test document.
-
-## 📁 Project layout
-
-```
-app.py            Streamlit UI
-eval.py           Golden-set evaluation harness
-rag/              RAG pipeline (one concept per file)
-  config.py       Tunable constants
-  prompts.py      LLM system prompts
-  ingest.py       PDF → chunks
-  embed.py        Embedding model + FAISS index
-  retrieve.py     Vector search
-  router.py       LLM intent classifier
-  answer.py       LLM answer generator
-docs/             Project notes and progress
-```
 
 ## 📝 License
 
