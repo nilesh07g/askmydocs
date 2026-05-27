@@ -2,7 +2,7 @@
 
 A chat-with-PDF app built on RAG (Retrieval-Augmented Generation). Upload any PDF, ask questions in natural language, get answers with exact page-number citations.
 
-**Live demo:** _Add Streamlit Cloud URL here after deploying_
+**Live demo:** https://askmydocs-nilesh.streamlit.app/
 **Stack:** Python · Streamlit · Groq (Llama 3.3 70B) · FAISS · sentence-transformers · pdfplumber
 
 ---
