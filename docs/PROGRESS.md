@@ -3,7 +3,7 @@
 > **Purpose:** Snapshot of where the build stands and what's next. Paste this into a new Claude / Claude Code session and you can resume without losing context.
 
 **Last updated:** 2026-05-28
-**Current status:** 🚀 **v1 DEPLOYED.** Live at https://askmydocs-nilesh.streamlit.app/ · Repo at https://github.com/nilesh07g/askmydocs
+**Current status:** 🚀 **v2 (Tier 1) MERGED to main and deploying.** Live at https://askmydocs-nilesh.streamlit.app/ · Repo at https://github.com/nilesh07g/askmydocs
 
 ---
 
@@ -75,19 +75,18 @@
 
 ## 🟡 Pending (in priority order)
 
-### ⚙️ Tier 1 — High resume ROI (~4–6 hrs total) — **DO THIS NEXT**
+### ⚙️ Tier 1 — High resume ROI ✅ DONE (merged to main 2026-05-28)
 
-Do these in order. Each is a clear bullet on the resume.
+- [x] **Right-size models: 8B router + 70B answerer** — `LLM_MODEL_ROUTER = llama-3.1-8b-instant`, `LLM_MODEL_ANSWERER = llama-3.3-70b-versatile`. Faster routing, ~3x daily token budget.
+- [x] **Streaming responses** — Groq `stream=True` + `st.write_stream`. Tokens appear live.
+- [x] **Hybrid retrieval — BM25 + vector + RRF** — `rag/hybrid.py`. BM25 + dense fused via Reciprocal Rank Fusion (k=60).
+- [x] **Cross-encoder reranking** — `rag/rerank.py`. `cross-encoder/ms-marco-MiniLM-L-6-v2`. Retrieves top-20 → reranks to top-5/12.
+- [x] **Embedding cache to disk** — `rag/cache.py`. Re-uploading the same PDF is instant.
+- [x] **RAGAS evaluation harness** — `eval.py` with real 10-question golden set for `docs/test.pdf` (gitignored). Judge runs on 8B (free tier budget).
+- [ ] **Actually run RAGAS and record scores** — Pending. Hit 70B daily quota twice during build. Re-run when quota resets, fill in actual numbers below.
 
-- [ ] **Right-size models: 8B router + 70B answerer** (~15 min): Use `llama-3.1-8b-instant` for the router, keep `llama-3.3-70b-versatile` for the answerer. ~3x daily token budget on free tier, faster routing, reads as a real engineering decision. (Quick win — do first.)
-- [ ] **Streaming responses** (~30 min): Use Groq `stream=True` + `st.write_stream`. Tokens appear live like ChatGPT. Big UX upgrade.
-- [ ] **Hybrid retrieval — BM25 + vector + RRF** (~1 hr): Add `rank_bm25`, run BM25 keyword search alongside FAISS, fuse with Reciprocal Rank Fusion. Industry standard. Talk-worthy in interviews.
-- [ ] **Cross-encoder reranking** (~30 min): Add `cross-encoder/ms-marco-MiniLM-L-6-v2`. Retrieve top-20 with FAISS, rerank to top-5. Typical 10–20% accuracy lift.
-- [ ] **Embedding cache to disk** (~30 min): Pickle `chunks + vectors` keyed by PDF hash. Re-uploading same PDF is instant. Shows production thinking.
-- [ ] **RAGAS evaluation** (~1.5 hrs): Add `ragas` lib to `eval.py`. Compute `faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`. Recruiters grep resumes for "RAGAS".
-
-**Resume bullet after Tier 1:**
-> Built a production-style RAG pipeline with hybrid retrieval (BM25 + dense), cross-encoder reranking, and RAGAS evaluation (faithfulness 0.XX, answer relevancy 0.XX on a 20-Q golden set).
+**Resume bullet after Tier 1 (final, with placeholder scores until eval completes):**
+> Built a production-style RAG pipeline with two-call agentic routing (8B classifier + 70B generator), hybrid retrieval (BM25 + dense fused via RRF), cross-encoder reranking, token streaming, on-disk embedding cache, and RAGAS evaluation harness (faithfulness 0.XX, answer relevancy 0.XX on a 10-Q golden set).
 
 ### 🥈 Tier 2 — Strong differentiators (~6–8 hrs, pick 1–2)
 
