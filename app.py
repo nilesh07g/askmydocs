@@ -20,9 +20,9 @@ from groq import Groq
 from rag.config import TOP_K_SPECIFIC, TOP_K_GLOBAL
 from rag.ingest import extract_pages, chunk_pages
 from rag.embed import load_embedder, embed_chunks, build_index_from_vectors
-from rag.retrieve import retrieve_multi
 from rag.router import route_query
 from rag.answer import build_answer_messages, ask_groq
+from rag.hybrid import BM25Searcher, retrieve_hybrid
 from rag import cache as embed_cache
 
 load_dotenv()
@@ -66,6 +66,7 @@ api_key = get_api_key()
 for key, default in {
     "chunks": None,
     "index": None,
+    "bm25": None,
     "pdf_name": None,
     "num_pages": 0,
     "num_chunks": 0,
@@ -95,6 +96,7 @@ with st.sidebar:
                 chunks = cached["chunks"]
                 vectors = cached["vectors"]
                 index = build_index_from_vectors(vectors)
+                bm25 = BM25Searcher(chunks)
                 # Re-extract pages just for the page count display
                 pdf_file.seek(0)
                 pages = extract_pages(pdf_file)
@@ -115,12 +117,14 @@ with st.sidebar:
                     embedder = load_embedder()
                     vectors = embed_chunks(chunks, embedder)
                     index = build_index_from_vectors(vectors)
+                    bm25 = BM25Searcher(chunks)
                     embed_cache.save(file_hash, chunks, vectors)
                 st.success(f"Ready! {len(pages)} pages, {len(chunks)} chunks indexed.")
 
         if pages:
             st.session_state.chunks = chunks
             st.session_state.index = index
+            st.session_state.bm25 = bm25
             st.session_state.pdf_name = pdf_file.name
             st.session_state.num_pages = len(pages)
             st.session_state.num_chunks = len(chunks)
@@ -172,7 +176,7 @@ def render_sources(retrieved: list[dict], show_scores: bool):
 
 
 def run_pipeline(client: Groq, user_query: str, embedder, dev: bool):
-    """Two-LLM-call agentic pipeline: route → retrieve → answer."""
+    """Two-LLM-call agentic pipeline: route → hybrid retrieve → answer."""
     with st.spinner("Routing..."):
         route_info = route_query(client, user_query, st.session_state.history)
 
@@ -183,21 +187,23 @@ def run_pipeline(client: Groq, user_query: str, embedder, dev: bool):
         retrieved = []
     elif intent == "global_question":
         with st.spinner("Searching across the document..."):
-            retrieved = retrieve_multi(
+            retrieved = retrieve_hybrid(
                 queries,
                 embedder,
                 st.session_state.index,
                 st.session_state.chunks,
+                st.session_state.bm25,
                 k_per_query=4,
                 k_total=TOP_K_GLOBAL,
             )
     else:
         with st.spinner("Searching..."):
-            retrieved = retrieve_multi(
+            retrieved = retrieve_hybrid(
                 queries or [user_query],
                 embedder,
                 st.session_state.index,
                 st.session_state.chunks,
+                st.session_state.bm25,
                 k_per_query=TOP_K_SPECIFIC,
                 k_total=TOP_K_SPECIFIC,
             )
