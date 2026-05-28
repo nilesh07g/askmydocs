@@ -6,7 +6,7 @@ prompt and call Groq to produce the final natural-language reply.
 
 from groq import Groq
 
-from .config import LLM_MODEL
+from .config import LLM_MODEL_ANSWERER
 from .prompts import ANSWERER_SYSTEM_TEMPLATE
 
 
@@ -50,7 +50,7 @@ def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.1) -> st
     chance of the model improvising format leaks or hallucinated content.
     """
     completion = client.chat.completions.create(
-        model=LLM_MODEL,
+        model=LLM_MODEL_ANSWERER,
         messages=messages,
         temperature=temperature,
         max_tokens=1024,

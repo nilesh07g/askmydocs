@@ -22,5 +22,13 @@ TOP_K_SPECIFIC = 5     # focused factual questions
 TOP_K_GLOBAL = 12      # summary / theme / overview (broader doc coverage needed)
 
 # ---- LLM ----
-# Groq serves Llama 3.3 70B at sub-second latency for free.
-LLM_MODEL = "llama-3.3-70b-versatile"
+# Two models, right-sized for the task:
+#   - Router: small, fast — intent classification + 3-4 search queries is easy.
+#   - Answerer: larger, capable — natural prose synthesis needs reasoning.
+# Bonus: the 8B has ~10x the daily free-tier limit, so we burn through fewer
+# tokens on every chat message.
+LLM_MODEL_ROUTER = "llama-3.1-8b-instant"
+LLM_MODEL_ANSWERER = "llama-3.3-70b-versatile"
+
+# Kept so any old `from rag.config import LLM_MODEL` import keeps working.
+LLM_MODEL = LLM_MODEL_ANSWERER
