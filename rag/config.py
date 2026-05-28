@@ -15,11 +15,13 @@ CHUNK_SIZE = 800       # characters per chunk (~1 paragraph)
 CHUNK_OVERLAP = 150    # overlap between consecutive chunks
 
 # ---- Retrieval ----
-# How many chunks reach the answerer LLM. Tuning trade-off:
-# - Too few → answer is missing context
-# - Too many → prompt is diluted with weakly-relevant text and answer quality drops
-TOP_K_SPECIFIC = 5     # focused factual questions
-TOP_K_GLOBAL = 12      # summary / theme / overview (broader doc coverage needed)
+# Two-stage retrieval:
+#   1. Hybrid (BM25 + vector + RRF) fetches a wide pool of TOP_K_INITIAL candidates
+#   2. Cross-encoder reranker scores each candidate against the query
+#   3. We keep TOP_K_SPECIFIC or TOP_K_GLOBAL after rerank — these go to the LLM.
+TOP_K_INITIAL = 20     # how many candidates hybrid retrieval pulls before reranking
+TOP_K_SPECIFIC = 5     # final chunks sent to the answerer for focused questions
+TOP_K_GLOBAL = 12      # final chunks sent for summary / theme / overview questions
 
 # ---- LLM ----
 # Two models, right-sized for the task:

@@ -17,12 +17,13 @@ import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
 
-from rag.config import TOP_K_SPECIFIC, TOP_K_GLOBAL
+from rag.config import TOP_K_INITIAL, TOP_K_SPECIFIC, TOP_K_GLOBAL
 from rag.ingest import extract_pages, chunk_pages
 from rag.embed import load_embedder, embed_chunks, build_index_from_vectors
 from rag.router import route_query
 from rag.answer import build_answer_messages, ask_groq
 from rag.hybrid import BM25Searcher, retrieve_hybrid
+from rag.rerank import load_reranker, rerank
 from rag import cache as embed_cache
 
 load_dotenv()
@@ -175,8 +176,8 @@ def render_sources(retrieved: list[dict], show_scores: bool):
             st.divider()
 
 
-def run_pipeline(client: Groq, user_query: str, embedder, dev: bool):
-    """Two-LLM-call agentic pipeline: route → hybrid retrieve → answer."""
+def run_pipeline(client: Groq, user_query: str, embedder, reranker, dev: bool):
+    """Agentic pipeline: route → hybrid retrieve → cross-encoder rerank → answer."""
     with st.spinner("Routing..."):
         route_info = route_query(client, user_query, st.session_state.history)
 
@@ -185,28 +186,21 @@ def run_pipeline(client: Groq, user_query: str, embedder, dev: bool):
 
     if intent in ("greeting", "off_topic") or not queries:
         retrieved = []
-    elif intent == "global_question":
-        with st.spinner("Searching across the document..."):
-            retrieved = retrieve_hybrid(
-                queries,
-                embedder,
-                st.session_state.index,
-                st.session_state.chunks,
-                st.session_state.bm25,
-                k_per_query=4,
-                k_total=TOP_K_GLOBAL,
-            )
     else:
-        with st.spinner("Searching..."):
-            retrieved = retrieve_hybrid(
+        final_k = TOP_K_GLOBAL if intent == "global_question" else TOP_K_SPECIFIC
+        with st.spinner("Searching + reranking..."):
+            # Stage 1: hybrid retrieval (BM25 + dense via RRF) → wide pool
+            candidates = retrieve_hybrid(
                 queries or [user_query],
                 embedder,
                 st.session_state.index,
                 st.session_state.chunks,
                 st.session_state.bm25,
-                k_per_query=TOP_K_SPECIFIC,
-                k_total=TOP_K_SPECIFIC,
+                k_per_query=6,
+                k_total=TOP_K_INITIAL,
             )
+            # Stage 2: cross-encoder rerank against the actual user query
+            retrieved = rerank(user_query, candidates, reranker, k=final_k)
 
     messages = build_answer_messages(user_query, retrieved, st.session_state.history)
     with st.spinner("Thinking..."):
@@ -238,12 +232,13 @@ else:
             st.markdown(user_query)
 
         embedder = load_embedder()
+        reranker = load_reranker()
         client = Groq(api_key=api_key)
 
         with st.chat_message("assistant"):
             try:
                 answer, retrieved, route_info = run_pipeline(
-                    client, user_query, embedder, dev_mode
+                    client, user_query, embedder, reranker, dev_mode
                 )
                 st.markdown(answer)
 
