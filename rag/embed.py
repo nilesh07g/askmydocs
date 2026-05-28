@@ -5,6 +5,7 @@ index that lets us find the most similar chunks to any query in milliseconds.
 """
 
 import faiss
+import numpy as np
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 
@@ -21,12 +22,8 @@ def load_embedder() -> SentenceTransformer:
     return SentenceTransformer(EMBED_MODEL_NAME)
 
 
-def build_faiss_index(chunks: list[dict], embedder: SentenceTransformer):
-    """Embed every chunk and build a cosine-similarity FAISS index.
-
-    We L2-normalize the vectors and use IndexFlatIP (inner product). On
-    normalized vectors, inner product == cosine similarity.
-    """
+def embed_chunks(chunks: list[dict], embedder: SentenceTransformer) -> np.ndarray:
+    """Embed every chunk and return L2-normalized vectors (float32)."""
     texts = [c["text"] for c in chunks]
     vectors = embedder.encode(
         texts,
@@ -34,8 +31,21 @@ def build_faiss_index(chunks: list[dict], embedder: SentenceTransformer):
         show_progress_bar=False,
         convert_to_numpy=True,
     ).astype("float32")
-
     faiss.normalize_L2(vectors)
+    return vectors
+
+
+def build_index_from_vectors(vectors: np.ndarray):
+    """Build a cosine-similarity FAISS index from already-normalized vectors.
+
+    IndexFlatIP + L2-normalized vectors == cosine similarity.
+    """
     index = faiss.IndexFlatIP(vectors.shape[1])
     index.add(vectors)
-    return index, vectors
+    return index
+
+
+def build_faiss_index(chunks: list[dict], embedder: SentenceTransformer):
+    """Convenience: embed chunks + build the index in one call."""
+    vectors = embed_chunks(chunks, embedder)
+    return build_index_from_vectors(vectors), vectors

@@ -5,6 +5,7 @@ __pycache__/
 .env.local
 *.pkl
 *.faiss
+.cache/
 .streamlit/secrets.toml
 .vscode/
 .idea/

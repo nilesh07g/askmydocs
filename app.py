@@ -19,10 +19,11 @@ from groq import Groq
 
 from rag.config import TOP_K_SPECIFIC, TOP_K_GLOBAL
 from rag.ingest import extract_pages, chunk_pages
-from rag.embed import load_embedder, build_faiss_index
+from rag.embed import load_embedder, embed_chunks, build_index_from_vectors
 from rag.retrieve import retrieve_multi
 from rag.router import route_query
 from rag.answer import build_answer_messages, ask_groq
+from rag import cache as embed_cache
 
 load_dotenv()
 
@@ -84,22 +85,46 @@ with st.sidebar:
     pdf_file = st.file_uploader("Choose a PDF", type=["pdf"])
 
     if pdf_file is not None and pdf_file.name != st.session_state.pdf_name:
-        with st.spinner("Reading PDF..."):
-            pages = extract_pages(pdf_file)
-        if not pages:
-            st.error("Couldn't extract any text. Is this a scanned PDF?")
+        # Hash file bytes to look up the embedding cache
+        pdf_bytes = pdf_file.getvalue()
+        file_hash = embed_cache.pdf_hash(pdf_bytes)
+        cached = embed_cache.load(file_hash)
+
+        if cached is not None:
+            with st.spinner("Loading cached embeddings (instant)..."):
+                chunks = cached["chunks"]
+                vectors = cached["vectors"]
+                index = build_index_from_vectors(vectors)
+                # Re-extract pages just for the page count display
+                pdf_file.seek(0)
+                pages = extract_pages(pdf_file)
+            st.success(
+                f"Ready (from cache)! {len(pages)} pages, {len(chunks)} chunks."
+            )
         else:
-            with st.spinner("Chunking + embedding (first time may take ~30s)..."):
-                chunks = chunk_pages(pages)
-                embedder = load_embedder()
-                index, _ = build_faiss_index(chunks, embedder)
+            pdf_file.seek(0)
+            with st.spinner("Reading PDF..."):
+                pages = extract_pages(pdf_file)
+            if not pages:
+                st.error("Couldn't extract any text. Is this a scanned PDF?")
+                pages = []
+
+            if pages:
+                with st.spinner("Chunking + embedding (first time may take ~30s)..."):
+                    chunks = chunk_pages(pages)
+                    embedder = load_embedder()
+                    vectors = embed_chunks(chunks, embedder)
+                    index = build_index_from_vectors(vectors)
+                    embed_cache.save(file_hash, chunks, vectors)
+                st.success(f"Ready! {len(pages)} pages, {len(chunks)} chunks indexed.")
+
+        if pages:
             st.session_state.chunks = chunks
             st.session_state.index = index
             st.session_state.pdf_name = pdf_file.name
             st.session_state.num_pages = len(pages)
             st.session_state.num_chunks = len(chunks)
             st.session_state.history = []
-            st.success(f"Ready! {len(pages)} pages, {len(chunks)} chunks indexed.")
 
     if st.session_state.pdf_name:
         st.divider()
