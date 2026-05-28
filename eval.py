@@ -21,11 +21,19 @@ import json
 import time
 from pathlib import Path
 
+# Disable LangSmith tracing inside RAGAS (otherwise ragas tries to ship every
+# judge call to api.smith.langchain.com — noisy and 403s without an API key).
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+os.environ.setdefault("LANGSMITH_TRACING", "false")
+os.environ.pop("LANGSMITH_API_KEY", None)
+os.environ.pop("LANGCHAIN_API_KEY", None)
+
 from dotenv import load_dotenv
 from groq import Groq
 
 from rag.config import (
     LLM_MODEL_ANSWERER,
+    LLM_MODEL_ROUTER,
     TOP_K_INITIAL,
     TOP_K_SPECIFIC,
     TOP_K_GLOBAL,
@@ -41,20 +49,71 @@ from rag.answer import build_answer_messages, ask_groq
 load_dotenv()
 
 
-# ---- Edit this golden set for YOUR test PDF ----
-# Each entry needs ground_truth for RAGAS (context_recall + answer_relevancy).
+# ---- Golden set for docs/test.pdf (I Don't Love You Anymore by Rithvik Singh) ----
+# Each ground_truth was hand-written from directly reading the cited pages.
+# Question-type mix: factual lookup, thematic, multi-hop, quote, out-of-scope.
 GOLDEN_SET = [
+    # === Direct factual lookups ===
     {
-        "q": "What is the main topic of this document?",
-        "ground_truth": "TODO: write the correct answer here",
-        "expected_pages": [1, 2],
+        "q": "Who is the author of this book?",
+        "ground_truth": "Rithvik Singh.",
+        "expected_pages": [3, 146],
     },
     {
-        "q": "Who is the author?",
-        "ground_truth": "TODO: write the correct answer here",
-        "expected_pages": [1],
+        "q": "What other book has this author written?",
+        "ground_truth": "Warmth, published in 2021.",
+        "expected_pages": [145, 146],
     },
-    # Add 8 more questions tailored to your test PDF.
+    {
+        "q": "Who is this book dedicated to?",
+        "ground_truth": "The author's mother. The dedication thanks her for being the only person who always loves him, even at his worst.",
+        "expected_pages": [4],
+    },
+
+    # === Thematic / global questions ===
+    {
+        "q": "What is the central theme of this book?",
+        "ground_truth": "Love, heartbreak, and emotional healing. The book is a collection of short poems and reflections about the pain of losing love, longing, friendship loss, and learning to value oneself enough to walk away from relationships that hurt.",
+        "expected_pages": [],
+    },
+    {
+        "q": "What kind of writing style does the author use?",
+        "ground_truth": "Short, poetic prose and free-verse poems with an introspective, emotional tone. Many pages contain only a few lines. The writing uses imagery drawn from nature — flowers, rain, the sky, the sun, and the ocean — to express feelings of love and loss.",
+        "expected_pages": [],
+    },
+
+    # === Multi-hop / synthesis ===
+    {
+        "q": "Does the author believe love should require fighting for someone's attention?",
+        "ground_truth": "No. The author argues that love should not feel like a tug of war, a race, or a fight. Love is not a trophy you have to fight for, but a gift someone wants to give you every day without you having to ask. If you have to constantly struggle to make space in someone's heart, they do not deserve to be with you.",
+        "expected_pages": [60],
+    },
+
+    # === Specific quote / passage ===
+    {
+        "q": "What does the author compare life with a former lover to in a 'half sun-lit room'?",
+        "ground_truth": "Life with that person, where their love brought darkness in equal measure to light, and the pain never fully left, so the author chose to leave.",
+        "expected_pages": [100],
+    },
+    {
+        "q": "What does the author say about losing friends over time?",
+        "ground_truth": "You lose friends without noticing — only realizing it later when you see an old photograph and the people you were once closest to are no longer in your life. Even childhood friends, the ones you sat next to in school or invited to your birthday parties, can quietly slip away.",
+        "expected_pages": [125],
+    },
+
+    # === Out-of-scope / negative (tests honest 'I don't know' behavior) ===
+    {
+        "q": "What university did the author attend?",
+        "ground_truth": "The book does not state where the author studied or which university he attended.",
+        "expected_pages": [],
+    },
+
+    # === Reader engagement / closing ===
+    {
+        "q": "How can readers contact the author?",
+        "ground_truth": "Through Instagram at @wordsofrithvik. The book invites readers to write to him there if they enjoyed the book.",
+        "expected_pages": [145, 146],
+    },
 ]
 
 
@@ -93,7 +152,11 @@ def run_ragas(items: list[dict]):
     from langchain_huggingface import HuggingFaceEmbeddings
 
     api_key = os.getenv("GROQ_API_KEY")
-    judge_llm = ChatGroq(model=LLM_MODEL_ANSWERER, api_key=api_key, temperature=0.0)
+    # Judge runs on 8B (LLM_MODEL_ROUTER) instead of 70B — the 70B free tier
+    # caps at 100k tokens/day and a full RAGAS pass blows through it. The 8B
+    # has ~1M TPD and is still a reliable judge for these metrics on portfolio
+    # eval scale (note the model in any resume claim about the scores).
+    judge_llm = ChatGroq(model=LLM_MODEL_ROUTER, api_key=api_key, temperature=0.0)
     embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL_NAME)
 
     dataset = Dataset.from_dict({
@@ -161,17 +224,27 @@ def evaluate_pdf(pdf_path: str):
         time.sleep(0.5)
 
     print("[4/4] Computing RAGAS metrics (this calls Groq several times, ~30-60s)...")
+    ragas_dict = None
     try:
         ragas_result = run_ragas(items)
+        # ragas 0.4.x: EvaluationResult exposes per-row scores via to_pandas().
+        # Metric names are the non-input columns. Average across rows for the summary.
+        df = ragas_result.to_pandas()
+        input_cols = {
+            "user_input", "response", "retrieved_contexts", "reference",
+            "question", "answer", "contexts", "ground_truth",
+        }
+        metric_cols = [c for c in df.columns if c not in input_cols]
+        ragas_dict = {col: float(df[col].mean(skipna=True)) for col in metric_cols}
+
         print("\n=========== RAGAS SCORES ===========")
-        for metric, score in ragas_result.items():
-            print(f"  {metric:25s} : {score:.3f}")
+        for metric, score in ragas_dict.items():
+            score_str = "NaN (judge calls failed)" if score != score else f"{score:.3f}"
+            print(f"  {metric:25s} : {score_str}")
         print("====================================")
-        ragas_dict = {k: float(v) for k, v in ragas_result.items()}
     except Exception as e:
-        print(f"\n  ⚠️  RAGAS evaluation failed: {e}")
-        print("     (Falling back to keyword/page eval only.)")
-        ragas_dict = None
+        print(f"\n  [WARN] RAGAS evaluation failed: {e}")
+        print("        (Falling back to keyword/page eval only.)")
 
     if questions_with_expected_pages:
         acc = page_hits / questions_with_expected_pages * 100
