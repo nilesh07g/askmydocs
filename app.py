@@ -21,7 +21,7 @@ from rag.config import TOP_K_INITIAL, TOP_K_SPECIFIC, TOP_K_GLOBAL
 from rag.ingest import extract_pages, chunk_pages
 from rag.embed import load_embedder, embed_chunks, build_index_from_vectors
 from rag.router import route_query
-from rag.answer import build_answer_messages, ask_groq
+from rag.answer import build_answer_messages, stream_groq
 from rag.hybrid import BM25Searcher, retrieve_hybrid
 from rag.rerank import load_reranker, rerank
 from rag import cache as embed_cache
@@ -176,8 +176,12 @@ def render_sources(retrieved: list[dict], show_scores: bool):
             st.divider()
 
 
-def run_pipeline(client: Groq, user_query: str, embedder, reranker, dev: bool):
-    """Agentic pipeline: route → hybrid retrieve → cross-encoder rerank → answer."""
+def prepare_pipeline(client: Groq, user_query: str, embedder, reranker):
+    """Route + retrieve + rerank. Returns (messages, retrieved, route_info).
+
+    Streaming the answer happens in the UI after this returns, so the user
+    sees tokens appear live instead of a long "Thinking..." spinner.
+    """
     with st.spinner("Routing..."):
         route_info = route_query(client, user_query, st.session_state.history)
 
@@ -189,7 +193,6 @@ def run_pipeline(client: Groq, user_query: str, embedder, reranker, dev: bool):
     else:
         final_k = TOP_K_GLOBAL if intent == "global_question" else TOP_K_SPECIFIC
         with st.spinner("Searching + reranking..."):
-            # Stage 1: hybrid retrieval (BM25 + dense via RRF) → wide pool
             candidates = retrieve_hybrid(
                 queries or [user_query],
                 embedder,
@@ -199,13 +202,10 @@ def run_pipeline(client: Groq, user_query: str, embedder, reranker, dev: bool):
                 k_per_query=6,
                 k_total=TOP_K_INITIAL,
             )
-            # Stage 2: cross-encoder rerank against the actual user query
             retrieved = rerank(user_query, candidates, reranker, k=final_k)
 
     messages = build_answer_messages(user_query, retrieved, st.session_state.history)
-    with st.spinner("Thinking..."):
-        answer = ask_groq(client, messages)
-    return answer, retrieved, route_info
+    return messages, retrieved, route_info
 
 
 # -------------------- Main chat area --------------------
@@ -237,10 +237,11 @@ else:
 
         with st.chat_message("assistant"):
             try:
-                answer, retrieved, route_info = run_pipeline(
-                    client, user_query, embedder, reranker, dev_mode
+                messages, retrieved, route_info = prepare_pipeline(
+                    client, user_query, embedder, reranker
                 )
-                st.markdown(answer)
+                # Stream tokens live (Groq stream=True + st.write_stream)
+                answer = st.write_stream(stream_groq(client, messages))
 
                 if dev_mode:
                     with st.expander(
