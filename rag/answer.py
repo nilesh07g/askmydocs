@@ -6,7 +6,7 @@ prompt and call Groq to produce the final natural-language reply.
 
 from groq import Groq
 
-from .config import LLM_MODEL
+from .config import LLM_MODEL_ANSWERER
 from .prompts import ANSWERER_SYSTEM_TEMPLATE
 
 
@@ -44,15 +44,30 @@ def build_answer_messages(
 
 
 def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.1) -> str:
-    """Call Groq and return the assistant's reply as a string.
+    """Call Groq and return the assistant's reply as a single string (non-streaming).
 
-    Low temperature (0.1) keeps the answerer deterministic and reduces the
-    chance of the model improvising format leaks or hallucinated content.
+    Used by eval.py where streaming would just be noise. The UI uses
+    stream_groq() instead to render tokens live.
     """
     completion = client.chat.completions.create(
-        model=LLM_MODEL,
+        model=LLM_MODEL_ANSWERER,
         messages=messages,
         temperature=temperature,
         max_tokens=1024,
     )
     return completion.choices[0].message.content
+
+
+def stream_groq(client: Groq, messages: list[dict], temperature: float = 0.1):
+    """Yield tokens as they arrive from Groq. Used with st.write_stream in the UI."""
+    stream = client.chat.completions.create(
+        model=LLM_MODEL_ANSWERER,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=1024,
+        stream=True,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta

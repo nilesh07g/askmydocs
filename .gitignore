@@ -5,6 +5,13 @@ __pycache__/
 .env.local
 *.pkl
 *.faiss
+.cache/
+
+# Test PDFs — never commit copyrighted content to a public repo
+docs/test.pdf
+docs/*.pdf
+docs/pdf_sample.txt
+test_pdfs/
 .streamlit/secrets.toml
 .vscode/
 .idea/

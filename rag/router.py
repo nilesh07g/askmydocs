@@ -12,7 +12,7 @@ import json
 
 from groq import Groq
 
-from .config import LLM_MODEL
+from .config import LLM_MODEL_ROUTER
 from .prompts import ROUTER_SYSTEM
 
 VALID_INTENTS = {"greeting", "specific_question", "global_question", "off_topic"}
@@ -32,7 +32,7 @@ def route_query(client: Groq, user_query: str, history: list[dict]) -> dict:
 
     try:
         resp = client.chat.completions.create(
-            model=LLM_MODEL,
+            model=LLM_MODEL_ROUTER,
             messages=messages,
             temperature=0.0,
             max_tokens=256,
