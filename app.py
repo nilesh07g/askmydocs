@@ -164,12 +164,21 @@ with st.sidebar:
 
 # -------------------- Helpers --------------------
 def render_sources(retrieved: list[dict], show_scores: bool):
-    """Source expander shown under every answer that used retrieval."""
+    """Source expander shown under every answer that used retrieval.
+
+    Sources are ordered by rerank-relevance (rank #1 = most relevant). In dev
+    mode we show the raw cross-encoder logit (higher = more relevant; negative
+    values are fine — what matters is order, not absolute scale).
+    """
     if not retrieved:
         return
     with st.expander(f"📚 Sources ({len(retrieved)} chunks)"):
         for i, src in enumerate(retrieved, 1):
-            score_text = f" _(similarity: {src['score']:.2f})_" if show_scores else ""
+            score_text = (
+                f" _(rank #{i} · rerank logit: {src['score']:.2f})_"
+                if show_scores
+                else ""
+            )
             st.markdown(f"**Source {i} — Page {src['page']}**{score_text}")
             preview = src["text"][:500] + ("..." if len(src["text"]) > 500 else "")
             st.text(preview)
