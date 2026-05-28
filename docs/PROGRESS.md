@@ -2,8 +2,8 @@
 
 > **Purpose:** Snapshot of where the build stands and what's next. Paste this into a new Claude / Claude Code session and you can resume without losing context.
 
-**Last updated:** 2026-05-27
-**Current status:** Local v1 working. Ready to deploy.
+**Last updated:** 2026-05-28
+**Current status:** 🚀 **v1 DEPLOYED.** Live at https://askmydocs-nilesh.streamlit.app/ · Repo at https://github.com/nilesh07g/askmydocs
 
 ---
 
@@ -49,31 +49,37 @@
 ### Project hygiene
 - Folder structure refactored into `rag/` package + `docs/` folder
 - `.gitignore` covers venv, .env, *.pkl, screenshots
-- README.md written for recruiters (with design-decision FAQ)
+- README.md simplified (no FAQ/roadmap clutter — just description, setup, eval, license)
 - `eval.py` runs the same pipeline as `app.py` (no duplication of logic)
+- Git history kept clean: no AI co-author trailers (preference saved to memory)
+
+### 🚀 Tier 0 — Deploy ✅ DONE
+
+- [x] GitHub repo created at https://github.com/nilesh07g/askmydocs
+- [x] `git init`, initial commit, force-pushed to rewrite history without AI attribution
+- [x] Push to GitHub via Git Credential Manager (browser OAuth)
+- [x] Streamlit Cloud account + GitHub authorization
+- [x] App deployed: https://askmydocs-nilesh.streamlit.app/
+- [x] `GROQ_API_KEY` added to Streamlit Secrets (rotated once after IDE accidentally exposed the original)
+- [x] Live URL added to README and pushed
+- [x] Build fixed: pinned `runtime.txt = python-3.11` + relaxed `requirements.txt` pins (Cloud's default Python 3.13 lacks wheels for `faiss-cpu` and `sentence-transformers`)
+
+### Deploy-time issues hit and resolved
+| Symptom | Root cause | Fix |
+|---|---|---|
+| `installer returned a non-zero exit code` on Streamlit Cloud | Cloud uses Python 3.13 by default; `faiss-cpu==1.8.0` + `sentence-transformers==2.7.0` have no 3.13 wheels yet | Added `runtime.txt` with `python-3.11`, loosened version pins so resolver had room |
+| `Error 401 Invalid API Key` on the live app | Stale/typo'd key in Streamlit Secrets after rotation | Re-pasted new key with correct TOML format `GROQ_API_KEY = "gsk_..."`, rebooted app from Manage app menu |
+| `Error 429 Rate limit reached` after a few queries | Free tier cap of 100k tokens/day on `llama-3.3-70b-versatile` | None needed for now — resets in ~1h. Future fix documented: split into 8B router + 70B answerer to ~3x daily capacity |
 
 ---
 
 ## 🟡 Pending (in priority order)
 
-### 🚀 Tier 0 — Deploy (DO THIS NEXT, ~20 min)
-
-The fastest way to maximize resume value. Iterate upgrades on a live URL.
-
-- [ ] Create GitHub repo (suggest: `askmydocs`)
-- [ ] `git init`, commit everything except `.env` + `venv/`
-- [ ] Push to GitHub
-- [ ] Sign in to https://share.streamlit.io
-- [ ] **New app** → pick repo → main branch → `app.py`
-- [ ] **Advanced settings → Secrets** → add `GROQ_API_KEY = "gsk_..."`
-- [ ] Deploy → get public URL
-- [ ] Add URL to `README.md` and resume
-- [ ] Take screenshots for README
-
-### ⚙️ Tier 1 — High resume ROI (~4–6 hrs total)
+### ⚙️ Tier 1 — High resume ROI (~4–6 hrs total) — **DO THIS NEXT**
 
 Do these in order. Each is a clear bullet on the resume.
 
+- [ ] **Right-size models: 8B router + 70B answerer** (~15 min): Use `llama-3.1-8b-instant` for the router, keep `llama-3.3-70b-versatile` for the answerer. ~3x daily token budget on free tier, faster routing, reads as a real engineering decision. (Quick win — do first.)
 - [ ] **Streaming responses** (~30 min): Use Groq `stream=True` + `st.write_stream`. Tokens appear live like ChatGPT. Big UX upgrade.
 - [ ] **Hybrid retrieval — BM25 + vector + RRF** (~1 hr): Add `rank_bm25`, run BM25 keyword search alongside FAISS, fuse with Reciprocal Rank Fusion. Industry standard. Talk-worthy in interviews.
 - [ ] **Cross-encoder reranking** (~30 min): Add `cross-encoder/ms-marco-MiniLM-L-6-v2`. Retrieve top-20 with FAISS, rerank to top-5. Typical 10–20% accuracy lift.
@@ -108,6 +114,7 @@ These are saved in `~/.claude/projects/.../memory/` for future projects:
 1. **Server-side secrets only** — never put API keys in user-facing UI fields, even with `type=password`.
 2. **LLM-native over heuristics** — use a small LLM call for intent/routing decisions, not hardcoded keyword lists.
 3. **Prompt shape mirroring** — LLMs copy the structure of their input. Fix format leakage by changing input format, not by adding "don't copy" rules. Lower temperature reinforces.
+4. **No AI co-author trailers in commits** — keep git history showing solo authorship; recruiters reading commits should see consistent personal authorship.
 
 ---
 
@@ -137,12 +144,14 @@ NILESH-RESUME/
 │   ├── router.py           ← LLM intent classifier
 │   └── answer.py           ← LLM answer generator
 ├── docs/
-│   ├── ASKMYDOCS_PROJECT_CONTEXT.md  ← original brief
-│   └── PROGRESS.md         ← this file
-├── requirements.txt
+│   ├── ASKMYDOCS_PROJECT_CONTEXT.md   ← original brief
+│   ├── PROGRESS.md                    ← this file (v1 status)
+│   └── PROGRESS_v2_PRODUCTION.md      ← production roadmap (LangSmith, CI/CD, RAGAS)
+├── requirements.txt       (loosened pins for Streamlit Cloud compat)
+├── runtime.txt            ← pins Python 3.11 on Streamlit Cloud
 ├── README.md
 ├── .gitignore
 ├── .env.example
-├── .env                    ← gitignored, contains GROQ_API_KEY
-└── venv/                   ← gitignored
+├── .env                   ← gitignored, contains GROQ_API_KEY
+└── venv/                  ← gitignored
 ```
