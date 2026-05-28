@@ -1,0 +1,11 @@
+# Eval-only dependencies — install ONLY when running eval.py locally.
+# These are NOT used by app.py and are intentionally excluded from the
+# Streamlit Cloud build to keep it lean and avoid dependency conflicts.
+#
+# Install with:   pip install -r requirements-eval.txt
+
+-r requirements.txt
+ragas>=0.1.0
+datasets>=2.18
+langchain-groq>=0.1
+langchain-huggingface>=0.0.3
