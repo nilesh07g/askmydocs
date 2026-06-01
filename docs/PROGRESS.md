@@ -97,13 +97,25 @@
 
 **The story the numbers tell:** the retrieval pipeline (hybrid BM25+vector → RRF → cross-encoder rerank) works very well — almost all relevant content makes it to the LLM. The answerer LLM (Llama 3.3 70B at temp 0.0) is the weak link: it grounds factual questions like "what does the author say about losing friends?" perfectly, but on biographical questions ("who is the author?", "what other book?") it generates plausible-sounding parametric content like "2 million Instagram followers" that does not appear in the document.
 
-**Three prompt designs were tested in one session.** Each surfaced a different prompt-engineering pitfall (documented in feedback memory):
+**Five prompt designs were tested over two days.** Each surfaced a different prompt-engineering pitfall (documented in feedback memory):
 1. Original with literal "GOOD output" few-shot → the model copied the example verbatim
 2. Universal system prompt with chunks in system message → the model treated chunks as a document to continue writing
-3. **Current (shipped):** chunks in user message + chunk format = desired citation format + temp 0.0 → universal across document types, but parametric hallucination on bio queries remains a Llama-3.3 limitation
+3. Chunks in user message + `Passage N — page X:` numbered labels → the model invented Passage 6, 7, 8 with hallucinated content
+4. XML-tagged `<context>...</context>` + `<question>...</question>` framing → reduced format leakage on first message but bio hallucination persisted
+5. **Current (shipped):** XML-tagged framing + industry-grade structure (role / input format / reasoning / output rules / prohibitions / failure mode) — same Llama-3.3 70B parametric drift on biographical queries
+
+**Verdict:** The bio hallucination is a **Llama 3.3 70B model limitation**, not a prompt bug. The model has strong parametric priors about "Instagram author" templates (millions of followers, bestselling books, podcasts, etc.) and interpolates them into responses for any document where the author is described as an Instagram writer — regardless of prompt structure. This was verified by reproducing the same hallucination in LangSmith Playground with hand-crafted reference passages.
+
+### 🔭 LangSmith observability — DONE (2026-06-02)
+- [x] **LangSmith tracing** for `router`, `hybrid_retrieval`, `cross_encoder_rerank`, `answerer`, plus parent `askmydocs_pipeline` trace
+- [x] **Project:** `askmydocs-dev` at https://smith.langchain.com/o/fc5e30e2-ac74-4b14-b6a8-0246364862d0
+- [x] **Trace-driven debugging proved the diagnosis** — saw the exact prompts, exact retrieved chunks, exact LLM output side-by-side. Confirmed retrieval is great, answerer is the weak link.
+
+### ⏭️ Tier-2 follow-up: switch answerer model
+- [ ] **Swap answerer LLM to Claude Haiku 3.5 or GPT-4o-mini.** Llama 3.3 70B's parametric drift on bio queries is the bottleneck. Stronger instruction-following models (Anthropic / OpenAI) should grounded RAG much better. Estimated ~30 min code change + free trial credit covers it.
 
 **Resume bullet (honest, defensible in interviews):**
-> Built a production-grade RAG pipeline (hybrid retrieval BM25+dense via RRF, cross-encoder reranking, agentic 8B/70B routing, token streaming, embedding cache). Evaluated with RAGAS on a 10-question golden set: **context recall 1.00, context precision 0.67, page-hit rate 86%**; surfaced a real answerer-grounding limitation on biographical queries (faithfulness 0.32). Three prompt redesigns and a structured analysis of LLM input-shape-mirroring behaviors documented as part of the eval.
+> Built a production-grade RAG pipeline (hybrid retrieval BM25+dense via RRF, cross-encoder reranking, agentic 8B/70B routing, token streaming, embedding cache) and instrumented it end-to-end with **LangSmith observability**. Evaluated with **RAGAS** on a 10-question golden set: **context recall 1.00, context precision 0.67, page-hit rate 86%**. Trace-driven analysis surfaced a Llama-3.3 70B grounding limitation on biographical queries; documented as a Tier-2 model-swap follow-up. Five prompt redesigns and a structured analysis of LLM input-shape-mirroring behaviors recorded as engineering artifacts.
 
 ### 🥈 Tier 2 — Strong differentiators (~6–8 hrs, pick 1–2)
 
