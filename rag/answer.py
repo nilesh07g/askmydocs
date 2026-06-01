@@ -7,7 +7,30 @@ prompt and call Groq to produce the final natural-language reply.
 from groq import Groq
 
 from .config import LLM_MODEL_ANSWERER
-from .prompts import ANSWERER_SYSTEM_TEMPLATE
+from .prompts import ANSWERER_SYSTEM
+
+
+def _format_user_turn(user_query: str, retrieved: list[dict]) -> str:
+    """Wrap the user's question with the reference passages for this turn.
+
+    Putting passages in the USER message (not the system message) makes the
+    model treat them as references for THIS question, not as a document to
+    extend. Big drop in hallucination vs. embedding passages in the system role.
+    """
+    if not retrieved:
+        return user_query
+
+    passages = "\n\n".join(
+        f"Passage {i+1} — page {r['page']}:\n{r['text']}"
+        for i, r in enumerate(retrieved)
+    )
+    return (
+        "Reference passages (use ONLY these to answer; do not draw on any "
+        "outside knowledge):\n\n"
+        f"{passages}\n\n"
+        "---\n\n"
+        f"Question: {user_query}"
+    )
 
 
 def build_answer_messages(
@@ -17,37 +40,24 @@ def build_answer_messages(
 ) -> list[dict]:
     """Assemble the messages list for the answerer LLM call.
 
-    If retrieved is empty (greeting / off-topic), we tell the LLM there are no
-    excerpts so it falls back to a conversational reply.
+    Layout:
+      system   = identity + behavior rules (static; no chunks)
+      history  = last few turns of plain Q/A (no chunks repeated)
+      user     = THIS turn's chunks + THIS turn's question
     """
-    if retrieved:
-        # Plain page-tagged passages. No special markup the model could mimic.
-        # Each passage shows up like a footnote-style "(from page N)" trailer.
-        context_block = "\n\n".join(
-            f"{r['text']}\n(from page {r['page']})"
-            for r in retrieved
-        )
-        source_section = context_block
-    else:
-        source_section = (
-            "(No reference passages were retrieved — the user is greeting, "
-            "chatting socially, or asking something off-topic.)"
-        )
-
-    system_msg = ANSWERER_SYSTEM_TEMPLATE.format(source_section=source_section)
-
-    messages = [{"role": "system", "content": system_msg}]
+    messages = [{"role": "system", "content": ANSWERER_SYSTEM}]
     for turn in history[-6:]:
         messages.append({"role": turn["role"], "content": turn["content"]})
-    messages.append({"role": "user", "content": user_query})
+    messages.append({"role": "user", "content": _format_user_turn(user_query, retrieved)})
     return messages
 
 
-def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.1) -> str:
+def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.0) -> str:
     """Call Groq and return the assistant's reply as a single string (non-streaming).
 
-    Used by eval.py where streaming would just be noise. The UI uses
-    stream_groq() instead to render tokens live.
+    Temperature 0.0 (greedy decoding) maximises faithfulness — the LLM is least
+    likely to drift into parametric knowledge when forced to take the highest-
+    probability token at every step. Trade-off: slightly less varied phrasing.
     """
     completion = client.chat.completions.create(
         model=LLM_MODEL_ANSWERER,
@@ -58,8 +68,12 @@ def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.1) -> st
     return completion.choices[0].message.content
 
 
-def stream_groq(client: Groq, messages: list[dict], temperature: float = 0.1):
-    """Yield tokens as they arrive from Groq. Used with st.write_stream in the UI."""
+def stream_groq(client: Groq, messages: list[dict], temperature: float = 0.0):
+    """Yield tokens as they arrive from Groq. Used with st.write_stream in the UI.
+
+    Temperature kept at 0.0 to match ask_groq — so RAGAS eval scores reflect
+    actual production behavior, not a slightly different (warmer) regime.
+    """
     stream = client.chat.completions.create(
         model=LLM_MODEL_ANSWERER,
         messages=messages,
