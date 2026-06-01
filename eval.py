@@ -46,7 +46,7 @@ from rag.rerank import load_reranker, rerank
 from rag.router import route_query
 from rag.answer import build_answer_messages, ask_groq
 
-load_dotenv()
+load_dotenv(override=True)  # .env wins over stale system env vars
 
 
 # ---- Golden set for docs/test.pdf (I Don't Love You Anymore by Rithvik Singh) ----

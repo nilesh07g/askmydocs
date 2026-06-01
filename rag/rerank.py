@@ -11,6 +11,7 @@ so this stays under ~100ms on CPU.
 """
 
 import streamlit as st
+from langsmith import traceable
 from sentence_transformers import CrossEncoder
 
 CROSS_ENCODER_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -22,6 +23,7 @@ def load_reranker() -> CrossEncoder:
     return CrossEncoder(CROSS_ENCODER_NAME)
 
 
+@traceable(run_type="tool", name="cross_encoder_rerank", metadata={"model": CROSS_ENCODER_NAME})
 def rerank(
     query: str,
     candidates: list[dict],

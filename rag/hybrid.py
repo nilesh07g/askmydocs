@@ -11,6 +11,7 @@ Why hybrid?
 import re
 
 import numpy as np
+from langsmith import traceable
 from rank_bm25 import BM25Okapi
 
 
@@ -55,6 +56,7 @@ def reciprocal_rank_fusion(
     return [{**chunk_map[i], "score": rrf_scores[i], "_idx": i} for i in ordered]
 
 
+@traceable(run_type="retriever", name="hybrid_retrieval")
 def retrieve_hybrid(
     queries: list[str],
     embedder,

@@ -11,6 +11,7 @@ generalizes to any phrasing or language.
 import json
 
 from groq import Groq
+from langsmith import traceable
 
 from .config import LLM_MODEL_ROUTER
 from .prompts import ROUTER_SYSTEM
@@ -18,6 +19,7 @@ from .prompts import ROUTER_SYSTEM
 VALID_INTENTS = {"greeting", "specific_question", "global_question", "off_topic"}
 
 
+@traceable(run_type="llm", name="router", metadata={"model": LLM_MODEL_ROUTER})
 def route_query(client: Groq, user_query: str, history: list[dict]) -> dict:
     """Classify intent + propose search queries.
 

@@ -5,6 +5,7 @@ prompt and call Groq to produce the final natural-language reply.
 """
 
 from groq import Groq
+from langsmith import traceable
 
 from .config import LLM_MODEL_ANSWERER
 from .prompts import ANSWERER_SYSTEM
@@ -13,24 +14,26 @@ from .prompts import ANSWERER_SYSTEM
 def _format_user_turn(user_query: str, retrieved: list[dict]) -> str:
     """Wrap the user's question with the reference passages for this turn.
 
-    Putting passages in the USER message (not the system message) makes the
-    model treat them as references for THIS question, not as a document to
-    extend. Big drop in hallucination vs. embedding passages in the system role.
+    Uses XML tags <context>...</context> and <question>...</question> matching
+    the structure declared in ANSWERER_SYSTEM. This is the format validated in
+    LangSmith Playground that fixed the bio-hallucination + 'Passage N'
+    pattern-completion bugs.
+
+    Key design choices:
+      - <context> is a closed tag → model treats the excerpts as a finite set,
+        not a list to extend
+      - [Page N] labels carry the page info without numbering chunks
+        (no '1, 2, 3...' sequence for the model to continue)
+      - The turn ends with </question> not 'Question:' → no 'Answer:' autocomplete
     """
     if not retrieved:
         return user_query
 
-    passages = "\n\n".join(
-        f"Passage {i+1} — page {r['page']}:\n{r['text']}"
-        for i, r in enumerate(retrieved)
+    excerpts = "\n\n".join(
+        f"[Page {r['page']}]\n{r['text']}"
+        for r in retrieved
     )
-    return (
-        "Reference passages (use ONLY these to answer; do not draw on any "
-        "outside knowledge):\n\n"
-        f"{passages}\n\n"
-        "---\n\n"
-        f"Question: {user_query}"
-    )
+    return f"<context>\n{excerpts}\n</context>\n\n<question>\n{user_query}\n</question>"
 
 
 def build_answer_messages(
@@ -52,6 +55,7 @@ def build_answer_messages(
     return messages
 
 
+@traceable(run_type="llm", name="answerer", metadata={"model": LLM_MODEL_ANSWERER})
 def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.0) -> str:
     """Call Groq and return the assistant's reply as a single string (non-streaming).
 
@@ -68,6 +72,7 @@ def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.0) -> st
     return completion.choices[0].message.content
 
 
+@traceable(run_type="llm", name="answerer_stream", metadata={"model": LLM_MODEL_ANSWERER})
 def stream_groq(client: Groq, messages: list[dict], temperature: float = 0.0):
     """Yield tokens as they arrive from Groq. Used with st.write_stream in the UI.
 

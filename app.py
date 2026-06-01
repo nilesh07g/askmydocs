@@ -16,6 +16,7 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
+from langsmith import traceable
 
 from rag.config import TOP_K_INITIAL, TOP_K_SPECIFIC, TOP_K_GLOBAL
 from rag.ingest import extract_pages, chunk_pages
@@ -26,7 +27,7 @@ from rag.hybrid import BM25Searcher, retrieve_hybrid
 from rag.rerank import load_reranker, rerank
 from rag import cache as embed_cache
 
-load_dotenv()
+load_dotenv(override=True)  # .env wins over stale system env vars
 
 
 # -------------------- Page config --------------------
@@ -185,11 +186,13 @@ def render_sources(retrieved: list[dict], show_scores: bool):
             st.divider()
 
 
+@traceable(run_type="chain", name="askmydocs_pipeline")
 def prepare_pipeline(client: Groq, user_query: str, embedder, reranker):
     """Route + retrieve + rerank. Returns (messages, retrieved, route_info).
 
-    Streaming the answer happens in the UI after this returns, so the user
-    sees tokens appear live instead of a long "Thinking..." spinner.
+    @traceable here groups the whole pipeline (router → retrieve → rerank)
+    under one parent trace in LangSmith. The answerer LLM call streams
+    separately but the parent trace pulls them together by run context.
     """
     with st.spinner("Routing..."):
         route_info = route_query(client, user_query, st.session_state.history)
