@@ -2,8 +2,8 @@
 
 > **Purpose:** Snapshot of where the build stands and what's next. Paste this into a new Claude / Claude Code session and you can resume without losing context.
 
-**Last updated:** 2026-05-28
-**Current status:** 🚀 **v2 (Tier 1) MERGED to main and deploying.** Live at https://askmydocs-nilesh.streamlit.app/ · Repo at https://github.com/nilesh07g/askmydocs
+**Last updated:** 2026-06-02
+**Current status:** ✅ **v2 (Tier 1) COMPLETE — deployed, evaluated, findings recorded.** Live at https://askmydocs-nilesh.streamlit.app/ · Repo at https://github.com/nilesh07g/askmydocs
 
 ---
 
@@ -83,10 +83,27 @@
 - [x] **Cross-encoder reranking** — `rag/rerank.py`. `cross-encoder/ms-marco-MiniLM-L-6-v2`. Retrieves top-20 → reranks to top-5/12.
 - [x] **Embedding cache to disk** — `rag/cache.py`. Re-uploading the same PDF is instant.
 - [x] **RAGAS evaluation harness** — `eval.py` with real 10-question golden set for `docs/test.pdf` (gitignored). Judge runs on 8B (free tier budget).
-- [ ] **Actually run RAGAS and record scores** — Pending. Hit 70B daily quota twice during build. Re-run when quota resets, fill in actual numbers below.
+- [x] **Ran RAGAS, recorded scores, surfaced a real bug.** See findings below.
 
-**Resume bullet after Tier 1 (final, with placeholder scores until eval completes):**
-> Built a production-style RAG pipeline with two-call agentic routing (8B classifier + 70B generator), hybrid retrieval (BM25 + dense fused via RRF), cross-encoder reranking, token streaming, on-disk embedding cache, and RAGAS evaluation harness (faithfulness 0.XX, answer relevancy 0.XX on a 10-Q golden set).
+### 📊 RAGAS findings on `docs/test.pdf` (10-Q golden set, 2026-06-02)
+
+| Metric | Score | Interpretation |
+|---|---|---|
+| Context recall | **1.00** | Retrieval pulled every ground-truth fact into the top-K |
+| Context precision | **0.67** | 2/3 of retrieved chunks are directly useful per question |
+| Page-hit rate | **86%** | 6/7 fact-checkable questions retrieved the cited page |
+| Faithfulness | 0.32 | ⚠️ Half the LLM's claims are not grounded in passages |
+| Answer relevancy | 0.32 | ⚠️ Answerer drifts off-topic on biographical questions |
+
+**The story the numbers tell:** the retrieval pipeline (hybrid BM25+vector → RRF → cross-encoder rerank) works very well — almost all relevant content makes it to the LLM. The answerer LLM (Llama 3.3 70B at temp 0.0) is the weak link: it grounds factual questions like "what does the author say about losing friends?" perfectly, but on biographical questions ("who is the author?", "what other book?") it generates plausible-sounding parametric content like "2 million Instagram followers" that does not appear in the document.
+
+**Three prompt designs were tested in one session.** Each surfaced a different prompt-engineering pitfall (documented in feedback memory):
+1. Original with literal "GOOD output" few-shot → the model copied the example verbatim
+2. Universal system prompt with chunks in system message → the model treated chunks as a document to continue writing
+3. **Current (shipped):** chunks in user message + chunk format = desired citation format + temp 0.0 → universal across document types, but parametric hallucination on bio queries remains a Llama-3.3 limitation
+
+**Resume bullet (honest, defensible in interviews):**
+> Built a production-grade RAG pipeline (hybrid retrieval BM25+dense via RRF, cross-encoder reranking, agentic 8B/70B routing, token streaming, embedding cache). Evaluated with RAGAS on a 10-question golden set: **context recall 1.00, context precision 0.67, page-hit rate 86%**; surfaced a real answerer-grounding limitation on biographical queries (faithfulness 0.32). Three prompt redesigns and a structured analysis of LLM input-shape-mirroring behaviors documented as part of the eval.
 
 ### 🥈 Tier 2 — Strong differentiators (~6–8 hrs, pick 1–2)
 
