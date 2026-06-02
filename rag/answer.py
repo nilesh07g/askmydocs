@@ -43,16 +43,40 @@ def build_answer_messages(
 ) -> list[dict]:
     """Assemble the messages list for the answerer LLM call.
 
-    Layout:
-      system   = identity + behavior rules (static; no chunks)
-      history  = last few turns of plain Q/A (no chunks repeated)
-      user     = THIS turn's chunks + THIS turn's question
+    Layout — deliberately ZERO history:
+      system   = identity + behavior rules
+      user     = THIS turn's <context> + <question>
+
+    Why no history? Conversation memory from prior turns AMPLIFIES errors when
+    earlier answers were imperfect — the model anchors on its own previous bad
+    output and continues that pattern instead of reading the new <context>.
+    Verified via LangSmith trace: replaying old turns caused identical
+    hallucinated answers across multiple unrelated questions.
+
+    Follow-up support ("what about the next chapter?") still works because the
+    ROUTER (rag/router.py) is the component that sees `history[-2:]` and
+    reformulates the current question into search queries that account for
+    prior context. The answerer always gets a fresh, isolated turn.
+
+    `history` is accepted as a parameter so the signature stays stable for
+    callers (eval.py also calls this), but it is intentionally not used here.
     """
-    messages = [{"role": "system", "content": ANSWERER_SYSTEM}]
-    for turn in history[-6:]:
-        messages.append({"role": turn["role"], "content": turn["content"]})
-    messages.append({"role": "user", "content": _format_user_turn(user_query, retrieved)})
-    return messages
+    del history  # explicit: history is handled by the router, not the answerer
+    return [
+        {"role": "system", "content": ANSWERER_SYSTEM},
+        {"role": "user", "content": _format_user_turn(user_query, retrieved)},
+    ]
+
+
+# Stop sequences for the answerer call.
+#
+# Without these, Llama-3.3-70B sometimes hallucinates multi-turn "transcript
+# continuation" — after writing the real answer, it emits </context> followed
+# by a fake <question>...</question> and then answers its own invented
+# question. Caught via LangSmith trace: input was clean, output contained the
+# garbage. Truncating at any of these tokens forces a clean stop the moment
+# the model tries to start a new fake turn.
+_STOP_SEQUENCES = ["</context>", "<context>", "</question>", "<question>"]
 
 
 @traceable(run_type="llm", name="answerer", metadata={"model": LLM_MODEL_ANSWERER})
@@ -68,6 +92,7 @@ def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.0) -> st
         messages=messages,
         temperature=temperature,
         max_tokens=1024,
+        stop=_STOP_SEQUENCES,
     )
     return completion.choices[0].message.content
 
@@ -85,6 +110,7 @@ def stream_groq(client: Groq, messages: list[dict], temperature: float = 0.0):
         temperature=temperature,
         max_tokens=1024,
         stream=True,
+        stop=_STOP_SEQUENCES,
     )
     for chunk in stream:
         delta = chunk.choices[0].delta.content
