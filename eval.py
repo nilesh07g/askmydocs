@@ -221,7 +221,9 @@ def evaluate_pdf(pdf_path: str):
         })
         print(f"      intent={out['route_info']['intent']}  pages={retrieved_pages}")
         print(f"      answer: {out['answer'][:120].strip()}{'...' if len(out['answer']) > 120 else ''}\n")
-        time.sleep(0.5)
+        # 13s between calls keeps us under Gemini 2.5 Flash's free-tier 5 RPM limit
+        # (5 RPM = one call every 12s minimum). 13s gives 1s of headroom.
+        time.sleep(13)
 
     print("[4/4] Computing RAGAS metrics (this calls Groq several times, ~30-60s)...")
     ragas_dict = None
