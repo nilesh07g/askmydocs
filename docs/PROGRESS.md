@@ -2,8 +2,22 @@
 
 > **Purpose:** Snapshot of where the build stands and what's next. Paste this into a new Claude / Claude Code session and you can resume without losing context.
 
-**Last updated:** 2026-06-02
-**Current status:** ✅ **v2 (Tier 1) COMPLETE — deployed, evaluated, findings recorded.** Live at https://askmydocs-nilesh.streamlit.app/ · Repo at https://github.com/nilesh07g/askmydocs
+**Last updated:** 2026-06-03
+**Current status:** ✅ **v2 (Tier 1) COMPLETE** + 🚧 **history-poisoning fix in progress on branch `fix/history-poisoning` (local-only, not pushed)**
+Live at https://askmydocs-nilesh.streamlit.app/ · Repo at https://github.com/nilesh07g/askmydocs
+
+## 🌙 RESUME HERE NEXT SESSION
+
+**Branch:** `fix/history-poisoning` (local, NOT pushed — work in progress)
+
+**What's done on this branch (commit `c25c2b0`):**
+- Stripped chat history from the answerer LLM call (history now stays at the router only) — verified Q2 no longer cascades Q1's bad answer
+- Added Groq `stop` sequences for `</context>`, `<context>`, `</question>`, `<question>` — blocks the model from writing fake follow-up Q&A in XML format
+
+**Definitive finding from today's LangSmith inspection:**
+Three identical inputs at temperature 0 produced three different hallucinated outputs. After we blocked `<question>`, the model started inventing `[question]` (square-bracket variant) to bypass the stop tokens. **This is a Llama-3.3-70B base-model limitation, not a prompt/format issue.**
+
+**Tomorrow's task:** Swap the answerer model. Choices in priority order: Claude Haiku 3.5 (recommended — $1 free credit) → GPT-4o-mini ($5 free credit) → Gemini Flash (free tier). Estimated 30–45 min. Branch from `fix/history-poisoning` as `feat/swap-answerer-to-<provider>`. The Groq 8B router stays; only the answerer call moves.
 
 ---
 

@@ -24,13 +24,19 @@ TOP_K_SPECIFIC = 5     # final chunks sent to the answerer for focused questions
 TOP_K_GLOBAL = 12      # final chunks sent for summary / theme / overview questions
 
 # ---- LLM ----
-# Two models, right-sized for the task:
-#   - Router: small, fast — intent classification + 3-4 search queries is easy.
-#   - Answerer: larger, capable — natural prose synthesis needs reasoning.
-# Bonus: the 8B has ~10x the daily free-tier limit, so we burn through fewer
-# tokens on every chat message.
+# Two providers, right-sized for the task:
+#   - Router  : Groq llama-3.1-8b-instant. Fast, free, simple JSON classification.
+#   - Answerer: Google Gemini 2.5 Flash. Stronger instruction-following / grounding
+#               than Llama-3.3-70B, which had a parametric-drift bug on biographical
+#               queries — see docs/PROGRESS.md and the LangSmith traces under
+#               askmydocs-dev for the evidence trail.
+#
+# Free-tier headroom:
+#   - Groq    8B  : 1M TPD
+#   - Gemini 2.5  : 1M TPD, 1,500 RPD, 15 RPM (per project)
 LLM_MODEL_ROUTER = "llama-3.1-8b-instant"
-LLM_MODEL_ANSWERER = "llama-3.3-70b-versatile"
+LLM_MODEL_ANSWERER = "gemini-2.5-flash"
 
-# Kept so any old `from rag.config import LLM_MODEL` import keeps working.
+# Legacy aliases — kept so any old import keeps working.
 LLM_MODEL = LLM_MODEL_ANSWERER
+GEMINI_MODEL_ANSWERER = LLM_MODEL_ANSWERER

@@ -1,11 +1,21 @@
 """LLM answer generation (the second of two LLM calls per user message).
 
-Given the user's query + retrieved chunks + chat history, build the answerer
-prompt and call Groq to produce the final natural-language reply.
+The router (rag/router.py) still uses Groq's 8B model for cheap intent
+classification. The ANSWERER moved to Google Gemini 2.5 Flash because
+Llama-3.3-70B exhibited a parametric-drift bug on biographical queries that
+prompt engineering alone could not fix (see docs/PROGRESS.md and the LangSmith
+trace history for the evidence).
+
+Public functions kept named `ask_groq` / `stream_groq` for backwards-compat
+with existing callers in app.py and eval.py — only the internal provider
+changed.
 """
 
-from groq import Groq
+import os
+
 from langsmith import traceable
+from google import genai
+from google.genai import types
 
 from .config import LLM_MODEL_ANSWERER
 from .prompts import ANSWERER_SYSTEM
@@ -15,9 +25,7 @@ def _format_user_turn(user_query: str, retrieved: list[dict]) -> str:
     """Wrap the user's question with the reference passages for this turn.
 
     Uses XML tags <context>...</context> and <question>...</question> matching
-    the structure declared in ANSWERER_SYSTEM. This is the format validated in
-    LangSmith Playground that fixed the bio-hallucination + 'Passage N'
-    pattern-completion bugs.
+    the structure declared in ANSWERER_SYSTEM.
 
     Key design choices:
       - <context> is a closed tag → model treats the excerpts as a finite set,
@@ -43,50 +51,113 @@ def build_answer_messages(
 ) -> list[dict]:
     """Assemble the messages list for the answerer LLM call.
 
-    Layout:
-      system   = identity + behavior rules (static; no chunks)
-      history  = last few turns of plain Q/A (no chunks repeated)
-      user     = THIS turn's chunks + THIS turn's question
+    Layout — deliberately ZERO history:
+      system   = identity + behavior rules
+      user     = THIS turn's <context> + <question>
+
+    Why no history? Conversation memory from prior turns AMPLIFIES errors when
+    earlier answers were imperfect — the model anchors on its own previous bad
+    output and continues that pattern instead of reading the new <context>.
+    Follow-ups work via the router (which uses history[-2:] for query
+    reformulation), not via the answerer.
     """
-    messages = [{"role": "system", "content": ANSWERER_SYSTEM}]
-    for turn in history[-6:]:
-        messages.append({"role": turn["role"], "content": turn["content"]})
-    messages.append({"role": "user", "content": _format_user_turn(user_query, retrieved)})
-    return messages
+    del history  # explicit: history is handled by the router, not the answerer
+    return [
+        {"role": "system", "content": ANSWERER_SYSTEM},
+        {"role": "user", "content": _format_user_turn(user_query, retrieved)},
+    ]
+
+
+# Stop sequences for the answerer call.
+#
+# Without these, some models hallucinate multi-turn "transcript continuation"
+# — after the real answer they emit </context><question>...</question> and
+# then answer their own invented question. Truncating at any of these tokens
+# forces a clean stop the moment the model tries to start a new fake turn.
+_STOP_SEQUENCES = ["</context>", "<context>", "</question>", "<question>"]
+
+
+def _gemini_client() -> genai.Client:
+    """Build a Gemini client from GEMINI_API_KEY in the environment.
+
+    Built fresh per call rather than cached — Streamlit Cloud restarts the
+    process anyway, and the cost is negligible. Avoids needing a global.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Add it to your .env (local) or "
+            "Streamlit Cloud Secrets (deployed)."
+        )
+    return genai.Client(api_key=api_key)
+
+
+def _split_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
+    """Convert OpenAI/Groq-style {role, content} list into Gemini's shape.
+
+    Gemini takes the system prompt as a separate `system_instruction` config
+    field (not as a message). Everything else becomes `contents` entries with
+    roles "user" or "model".
+    """
+    system_instruction: str | None = None
+    contents: list[dict] = []
+    for msg in messages:
+        role = msg["role"]
+        content = msg["content"]
+        if role == "system":
+            system_instruction = content
+        else:
+            gemini_role = "model" if role == "assistant" else "user"
+            contents.append({"role": gemini_role, "parts": [{"text": content}]})
+    return system_instruction, contents
+
+
+def _make_config(temperature: float, system_instruction: str | None):
+    return types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=temperature,
+        max_output_tokens=1024,
+        stop_sequences=_STOP_SEQUENCES,
+    )
 
 
 @traceable(run_type="llm", name="answerer", metadata={"model": LLM_MODEL_ANSWERER})
-def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.0) -> str:
-    """Call Groq and return the assistant's reply as a single string (non-streaming).
+def ask_groq(client, messages: list[dict], temperature: float = 0.0) -> str:
+    """Non-streaming answerer call — returns the full reply as one string.
 
-    Temperature 0.0 (greedy decoding) maximises faithfulness — the LLM is least
-    likely to drift into parametric knowledge when forced to take the highest-
-    probability token at every step. Trade-off: slightly less varied phrasing.
+    Name kept as `ask_groq` for backwards-compat; provider is Gemini under the
+    hood. `client` argument is ignored — we build a Gemini client internally.
+
+    Temperature 0.0 (greedy decoding) maximises faithfulness — the model is
+    least likely to drift into parametric knowledge when forced to take the
+    highest-probability token at every step.
     """
-    completion = client.chat.completions.create(
+    del client  # legacy Groq client param — Gemini client built inside
+    gemini = _gemini_client()
+    system_instruction, contents = _split_messages(messages)
+    response = gemini.models.generate_content(
         model=LLM_MODEL_ANSWERER,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=1024,
+        contents=contents,
+        config=_make_config(temperature, system_instruction),
     )
-    return completion.choices[0].message.content
+    return response.text or ""
 
 
 @traceable(run_type="llm", name="answerer_stream", metadata={"model": LLM_MODEL_ANSWERER})
-def stream_groq(client: Groq, messages: list[dict], temperature: float = 0.0):
-    """Yield tokens as they arrive from Groq. Used with st.write_stream in the UI.
+def stream_groq(client, messages: list[dict], temperature: float = 0.0):
+    """Streaming answerer call — yields text chunks as they arrive.
 
-    Temperature kept at 0.0 to match ask_groq — so RAGAS eval scores reflect
-    actual production behavior, not a slightly different (warmer) regime.
+    Used with st.write_stream in the UI so tokens appear live. Same Gemini
+    model + same stop sequences as ask_groq; only the API call type differs.
     """
-    stream = client.chat.completions.create(
+    del client  # legacy Groq client param — Gemini client built inside
+    gemini = _gemini_client()
+    system_instruction, contents = _split_messages(messages)
+    stream = gemini.models.generate_content_stream(
         model=LLM_MODEL_ANSWERER,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=1024,
-        stream=True,
+        contents=contents,
+        config=_make_config(temperature, system_instruction),
     )
     for chunk in stream:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+        if chunk.text:
+            yield chunk.text
