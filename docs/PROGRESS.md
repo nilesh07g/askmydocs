@@ -3,21 +3,34 @@
 > **Purpose:** Snapshot of where the build stands and what's next. Paste this into a new Claude / Claude Code session and you can resume without losing context.
 
 **Last updated:** 2026-06-03
-**Current status:** ✅ **v2 (Tier 1) COMPLETE** + 🚧 **history-poisoning fix in progress on branch `fix/history-poisoning` (local-only, not pushed)**
+**Current status:** ✅ **Bio-hallucination bug fixed in production. Gemini 2.5 Flash answerer is live.**
 Live at https://askmydocs-nilesh.streamlit.app/ · Repo at https://github.com/nilesh07g/askmydocs
 
-## 🌙 RESUME HERE NEXT SESSION
+## 🟢 Latest shipped (merge commit `3f11f3d`, 2026-06-03)
 
-**Branch:** `fix/history-poisoning` (local, NOT pushed — work in progress)
+The two-day bio-hallucination saga is closed. Three layered fixes on branch `fix/history-poisoning` (now merged + deleted):
 
-**What's done on this branch (commit `c25c2b0`):**
-- Stripped chat history from the answerer LLM call (history now stays at the router only) — verified Q2 no longer cascades Q1's bad answer
-- Added Groq `stop` sequences for `</context>`, `<context>`, `</question>`, `<question>` — blocks the model from writing fake follow-up Q&A in XML format
+1. **History poisoning** — answerer no longer receives prior chat turns (router still handles conversational context). Confirmed via LangSmith trace that bad outputs no longer cascade across questions.
+2. **Stop sequences** — Groq `stop=['</context>', '<context>', '</question>', '<question>']` prevents the model from inventing fake follow-up Q&A blocks in XML format.
+3. **Answerer model swap** — Groq Llama-3.3-70B → Google Gemini 2.5 Flash. Llama exhibited parametric drift on biographical queries that prompt engineering could not fix; Gemini grounds correctly on identical inputs.
 
-**Definitive finding from today's LangSmith inspection:**
-Three identical inputs at temperature 0 produced three different hallucinated outputs. After we blocked `<question>`, the model started inventing `[question]` (square-bracket variant) to bypass the stop tokens. **This is a Llama-3.3-70B base-model limitation, not a prompt/format issue.**
+The Groq Llama-3.1-8B router stays (cheap intent classification). Only the answerer call moved providers.
 
-**Tomorrow's task:** Swap the answerer model. Choices in priority order: Claude Haiku 3.5 (recommended — $1 free credit) → GPT-4o-mini ($5 free credit) → Gemini Flash (free tier). Estimated 30–45 min. Branch from `fix/history-poisoning` as `feat/swap-answerer-to-<provider>`. The Groq 8B router stays; only the answerer call moves.
+### Production observability
+- **Local dev traces** flow to LangSmith project `askmydocs-dev`
+- **Production traces** flow to LangSmith project `askmydocs-prod` (separated for clean signal — recruiter clicks don't pollute development metrics)
+- All `@traceable` decorators fire: `router`, `hybrid_retrieval`, `cross_encoder_rerank`, `answerer_stream`, `askmydocs_pipeline` (parent)
+
+### Verified end-to-end on live URL
+- "who is the author?" → "The author is Rithvik Singh ... Warmth ... (p. 146)" — grounded, cited, no hallucination
+- "what does the author say about losing friends?" → real page 125 paraphrase
+- LangSmith `askmydocs-prod` project receiving traces from prod users in real time
+
+## ⏭️ Next session — Tier-2 polish (no urgency, app is solid)
+
+1. **Prompts in LangSmith Hub** — push `ANSWERER_SYSTEM` + `ROUTER_SYSTEM` to LangSmith Hub. Replace hardcoded strings in `rag/prompts.py` with `pull_prompt()` calls. Tag versions per env (`:dev` / `:prod`). Outcome: edit prompts in LangSmith web UI without code redeploy. Est. 30–45 min on a fresh branch.
+2. **Complete RAGAS rerun on Gemini** — once daily quota resets, full 10-question eval. Expected faithfulness jump 0.32 → 0.85+. Update README/PROGRESS.md with the new numbers.
+3. **eval.py incremental persistence** — write `eval_results.json` after each question instead of at the end, so a mid-run crash doesn't waste the work.
 
 ---
 
