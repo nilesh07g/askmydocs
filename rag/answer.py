@@ -1,11 +1,21 @@
 """LLM answer generation (the second of two LLM calls per user message).
 
-Given the user's query + retrieved chunks + chat history, build the answerer
-prompt and call Groq to produce the final natural-language reply.
+The router (rag/router.py) still uses Groq's 8B model for cheap intent
+classification. The ANSWERER moved to Google Gemini 2.5 Flash because
+Llama-3.3-70B exhibited a parametric-drift bug on biographical queries that
+prompt engineering alone could not fix (see docs/PROGRESS.md and the LangSmith
+trace history for the evidence).
+
+Public functions kept named `ask_groq` / `stream_groq` for backwards-compat
+with existing callers in app.py and eval.py — only the internal provider
+changed.
 """
 
-from groq import Groq
+import os
+
 from langsmith import traceable
+from google import genai
+from google.genai import types
 
 from .config import LLM_MODEL_ANSWERER
 from .prompts import ANSWERER_SYSTEM
@@ -15,9 +25,7 @@ def _format_user_turn(user_query: str, retrieved: list[dict]) -> str:
     """Wrap the user's question with the reference passages for this turn.
 
     Uses XML tags <context>...</context> and <question>...</question> matching
-    the structure declared in ANSWERER_SYSTEM. This is the format validated in
-    LangSmith Playground that fixed the bio-hallucination + 'Passage N'
-    pattern-completion bugs.
+    the structure declared in ANSWERER_SYSTEM.
 
     Key design choices:
       - <context> is a closed tag → model treats the excerpts as a finite set,
@@ -50,16 +58,8 @@ def build_answer_messages(
     Why no history? Conversation memory from prior turns AMPLIFIES errors when
     earlier answers were imperfect — the model anchors on its own previous bad
     output and continues that pattern instead of reading the new <context>.
-    Verified via LangSmith trace: replaying old turns caused identical
-    hallucinated answers across multiple unrelated questions.
-
-    Follow-up support ("what about the next chapter?") still works because the
-    ROUTER (rag/router.py) is the component that sees `history[-2:]` and
-    reformulates the current question into search queries that account for
-    prior context. The answerer always gets a fresh, isolated turn.
-
-    `history` is accepted as a parameter so the signature stays stable for
-    callers (eval.py also calls this), but it is intentionally not used here.
+    Follow-ups work via the router (which uses history[-2:] for query
+    reformulation), not via the answerer.
     """
     del history  # explicit: history is handled by the router, not the answerer
     return [
@@ -70,49 +70,94 @@ def build_answer_messages(
 
 # Stop sequences for the answerer call.
 #
-# Without these, Llama-3.3-70B sometimes hallucinates multi-turn "transcript
-# continuation" — after writing the real answer, it emits </context> followed
-# by a fake <question>...</question> and then answers its own invented
-# question. Caught via LangSmith trace: input was clean, output contained the
-# garbage. Truncating at any of these tokens forces a clean stop the moment
-# the model tries to start a new fake turn.
+# Without these, some models hallucinate multi-turn "transcript continuation"
+# — after the real answer they emit </context><question>...</question> and
+# then answer their own invented question. Truncating at any of these tokens
+# forces a clean stop the moment the model tries to start a new fake turn.
 _STOP_SEQUENCES = ["</context>", "<context>", "</question>", "<question>"]
 
 
-@traceable(run_type="llm", name="answerer", metadata={"model": LLM_MODEL_ANSWERER})
-def ask_groq(client: Groq, messages: list[dict], temperature: float = 0.0) -> str:
-    """Call Groq and return the assistant's reply as a single string (non-streaming).
+def _gemini_client() -> genai.Client:
+    """Build a Gemini client from GEMINI_API_KEY in the environment.
 
-    Temperature 0.0 (greedy decoding) maximises faithfulness — the LLM is least
-    likely to drift into parametric knowledge when forced to take the highest-
-    probability token at every step. Trade-off: slightly less varied phrasing.
+    Built fresh per call rather than cached — Streamlit Cloud restarts the
+    process anyway, and the cost is negligible. Avoids needing a global.
     """
-    completion = client.chat.completions.create(
-        model=LLM_MODEL_ANSWERER,
-        messages=messages,
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Add it to your .env (local) or "
+            "Streamlit Cloud Secrets (deployed)."
+        )
+    return genai.Client(api_key=api_key)
+
+
+def _split_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
+    """Convert OpenAI/Groq-style {role, content} list into Gemini's shape.
+
+    Gemini takes the system prompt as a separate `system_instruction` config
+    field (not as a message). Everything else becomes `contents` entries with
+    roles "user" or "model".
+    """
+    system_instruction: str | None = None
+    contents: list[dict] = []
+    for msg in messages:
+        role = msg["role"]
+        content = msg["content"]
+        if role == "system":
+            system_instruction = content
+        else:
+            gemini_role = "model" if role == "assistant" else "user"
+            contents.append({"role": gemini_role, "parts": [{"text": content}]})
+    return system_instruction, contents
+
+
+def _make_config(temperature: float, system_instruction: str | None):
+    return types.GenerateContentConfig(
+        system_instruction=system_instruction,
         temperature=temperature,
-        max_tokens=1024,
-        stop=_STOP_SEQUENCES,
+        max_output_tokens=1024,
+        stop_sequences=_STOP_SEQUENCES,
     )
-    return completion.choices[0].message.content
+
+
+@traceable(run_type="llm", name="answerer", metadata={"model": LLM_MODEL_ANSWERER})
+def ask_groq(client, messages: list[dict], temperature: float = 0.0) -> str:
+    """Non-streaming answerer call — returns the full reply as one string.
+
+    Name kept as `ask_groq` for backwards-compat; provider is Gemini under the
+    hood. `client` argument is ignored — we build a Gemini client internally.
+
+    Temperature 0.0 (greedy decoding) maximises faithfulness — the model is
+    least likely to drift into parametric knowledge when forced to take the
+    highest-probability token at every step.
+    """
+    del client  # legacy Groq client param — Gemini client built inside
+    gemini = _gemini_client()
+    system_instruction, contents = _split_messages(messages)
+    response = gemini.models.generate_content(
+        model=LLM_MODEL_ANSWERER,
+        contents=contents,
+        config=_make_config(temperature, system_instruction),
+    )
+    return response.text or ""
 
 
 @traceable(run_type="llm", name="answerer_stream", metadata={"model": LLM_MODEL_ANSWERER})
-def stream_groq(client: Groq, messages: list[dict], temperature: float = 0.0):
-    """Yield tokens as they arrive from Groq. Used with st.write_stream in the UI.
+def stream_groq(client, messages: list[dict], temperature: float = 0.0):
+    """Streaming answerer call — yields text chunks as they arrive.
 
-    Temperature kept at 0.0 to match ask_groq — so RAGAS eval scores reflect
-    actual production behavior, not a slightly different (warmer) regime.
+    Used with st.write_stream in the UI so tokens appear live. Same Gemini
+    model + same stop sequences as ask_groq; only the API call type differs.
     """
-    stream = client.chat.completions.create(
+    del client  # legacy Groq client param — Gemini client built inside
+    gemini = _gemini_client()
+    system_instruction, contents = _split_messages(messages)
+    stream = gemini.models.generate_content_stream(
         model=LLM_MODEL_ANSWERER,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=1024,
-        stream=True,
-        stop=_STOP_SEQUENCES,
+        contents=contents,
+        config=_make_config(temperature, system_instruction),
     )
     for chunk in stream:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+        if chunk.text:
+            yield chunk.text
