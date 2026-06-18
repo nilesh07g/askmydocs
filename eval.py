@@ -174,11 +174,75 @@ def run_ragas(items: list[dict]):
     )
 
 
+def _save_progress(
+    out_path: Path,
+    answerer_model: str,
+    items: list[dict],
+    ragas_dict: dict | None = None,
+    page_hit_rate: float | None = None,
+) -> None:
+    """Write the current eval state to disk after every question + at the end.
+
+    Incremental persistence: if Gemini's daily quota cuts us off mid-run, we
+    don't lose the calls that already succeeded. Re-running the script reads
+    this file, skips already-completed questions, and continues.
+    """
+    out_path.write_text(json.dumps({
+        "answerer_model": answerer_model,
+        "ragas": ragas_dict,
+        "page_hit_rate": page_hit_rate,
+        "items": [
+            {
+                "q": it["q"],
+                "ground_truth": it["ground_truth"],
+                "answer": it["answer"],
+                "intent": it["intent"],
+                "retrieved_pages": it["retrieved_pages"],
+                # Keep the full chunks so RAGAS can score later without
+                # re-running the (expensive) Gemini pipeline calls.
+                "retrieved": [
+                    {"page": r["page"], "text": r["text"], "score": float(r.get("score", 0))}
+                    for r in it.get("retrieved", [])
+                ],
+            }
+            for it in items
+        ],
+    }, indent=2))
+
+
+def _load_existing(out_path: Path, expected_model: str) -> list[dict]:
+    """Read prior eval_results.json. Returns saved items only if the model
+    matches — otherwise the saved data is from a different run and we ignore it.
+    """
+    if not out_path.exists():
+        return []
+    try:
+        data = json.loads(out_path.read_text())
+    except Exception:
+        return []
+    if data.get("answerer_model") != expected_model:
+        print(
+            f"  Note: eval_results.json was produced by '{data.get('answerer_model')}' "
+            f"(not '{expected_model}'). Ignoring it and starting fresh.\n"
+        )
+        return []
+    return data.get("items", [])
+
+
 def evaluate_pdf(pdf_path: str):
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         print("ERROR: Set GROQ_API_KEY in your .env file first.")
         sys.exit(1)
+
+    out_path = Path("eval_results.json")
+
+    # ---- Resume from any prior incremental run that matches our model ----
+    items = _load_existing(out_path, LLM_MODEL_ANSWERER)
+    completed = {it["q"] for it in items}
+    if completed:
+        print(f"\n[resume] Found {len(items)} completed question(s) in {out_path.name}; "
+              f"will skip those and continue.\n")
 
     print(f"\n[1/4] Loading PDF: {pdf_path}")
     with open(pdf_path, "rb") as f:
@@ -194,22 +258,24 @@ def evaluate_pdf(pdf_path: str):
     reranker = load_reranker()
     print(f"      Built index with {len(chunks)} chunks")
 
-    print(f"[3/4] Running pipeline on {len(GOLDEN_SET)} questions...\n")
+    remaining = len(GOLDEN_SET) - len(completed)
+    print(f"[3/4] Running pipeline on {len(GOLDEN_SET)} questions "
+          f"({len(completed)} already done, {remaining} remaining)...\n")
     client = Groq(api_key=api_key)
 
-    items = []
-    page_hits = 0
-    questions_with_expected_pages = 0
     for i, q in enumerate(GOLDEN_SET, 1):
-        print(f"  Q{i}: {q['q']}")
-        out = run_pipeline(client, q["q"], embedder, index, chunks, bm25, reranker)
-        retrieved_pages = sorted({r["page"] for r in out["retrieved"]})
+        if q["q"] in completed:
+            print(f"  Q{i}: SKIP (already in eval_results.json)\n")
+            continue
 
-        expected = set(q.get("expected_pages") or [])
-        if expected:
-            questions_with_expected_pages += 1
-            if expected & set(retrieved_pages):
-                page_hits += 1
+        print(f"  Q{i}: {q['q']}")
+        try:
+            out = run_pipeline(client, q["q"], embedder, index, chunks, bm25, reranker)
+        except Exception as e:
+            print(f"      ERROR: {type(e).__name__}: {str(e)[:200]}")
+            print("      Progress saved. Re-run the script to resume from this question.")
+            return
+        retrieved_pages = sorted({r["page"] for r in out["retrieved"]})
 
         items.append({
             "q": q["q"],
@@ -218,19 +284,40 @@ def evaluate_pdf(pdf_path: str):
             "retrieved": out["retrieved"],
             "intent": out["route_info"]["intent"],
             "retrieved_pages": retrieved_pages,
+            "expected_pages": q.get("expected_pages") or [],
         })
-        print(f"      intent={out['route_info']['intent']}  pages={retrieved_pages}")
-        print(f"      answer: {out['answer'][:120].strip()}{'...' if len(out['answer']) > 120 else ''}\n")
-        # 13s between calls keeps us under Gemini 2.5 Flash's free-tier 5 RPM limit
-        # (5 RPM = one call every 12s minimum). 13s gives 1s of headroom.
-        time.sleep(13)
+        # Save IMMEDIATELY so a later crash doesn't waste this call.
+        _save_progress(out_path, LLM_MODEL_ANSWERER, items)
 
-    print("[4/4] Computing RAGAS metrics (this calls Groq several times, ~30-60s)...")
+        print(f"      intent={out['route_info']['intent']}  pages={retrieved_pages}")
+        preview = out["answer"][:120].strip()
+        print(f"      answer: {preview}{'...' if len(out['answer']) > 120 else ''}")
+        print(f"      → saved {len(items)}/{len(GOLDEN_SET)} to {out_path.name}\n")
+
+        # 13s between calls keeps us under Gemini 2.5 Flash's free-tier 5 RPM
+        # limit (5 RPM = one call every 12s minimum). 13s gives 1s of headroom.
+        # Skip the sleep after the last question.
+        if i < len(GOLDEN_SET):
+            time.sleep(13)
+
+    # ---- Page-hit metric (cheap, no LLM calls) ----
+    page_hits = 0
+    questions_with_expected_pages = 0
+    for it in items:
+        expected = set(it.get("expected_pages") or [])
+        if expected:
+            questions_with_expected_pages += 1
+            if expected & set(it["retrieved_pages"]):
+                page_hits += 1
+    page_hit_rate = (
+        page_hits / questions_with_expected_pages
+        if questions_with_expected_pages else None
+    )
+
+    print("[4/4] Computing RAGAS metrics (uses Groq 8B as judge, ~30-60s)...")
     ragas_dict = None
     try:
         ragas_result = run_ragas(items)
-        # ragas 0.4.x: EvaluationResult exposes per-row scores via to_pandas().
-        # Metric names are the non-input columns. Average across rows for the summary.
         df = ragas_result.to_pandas()
         input_cols = {
             "user_input", "response", "retrieved_contexts", "reference",
@@ -246,32 +333,15 @@ def evaluate_pdf(pdf_path: str):
         print("====================================")
     except Exception as e:
         print(f"\n  [WARN] RAGAS evaluation failed: {e}")
-        print("        (Falling back to keyword/page eval only.)")
+        print("        (Pipeline answers are saved; you can rerun RAGAS later.)")
 
     if questions_with_expected_pages:
-        acc = page_hits / questions_with_expected_pages * 100
-        print(f"\n  Cheap retrieval check (any expected page hit): "
-              f"{page_hits}/{questions_with_expected_pages} ({acc:.0f}%)")
+        print(f"\n  Page-hit rate: "
+              f"{page_hits}/{questions_with_expected_pages} ({page_hit_rate*100:.0f}%)")
 
-    # Persist results for later comparison
-    output = {
-        "ragas": ragas_dict,
-        "page_hit_rate": page_hits / questions_with_expected_pages
-            if questions_with_expected_pages else None,
-        "items": [
-            {
-                "q": it["q"],
-                "ground_truth": it["ground_truth"],
-                "answer": it["answer"],
-                "intent": it["intent"],
-                "retrieved_pages": it["retrieved_pages"],
-            }
-            for it in items
-        ],
-    }
-    out_path = Path("eval_results.json")
-    out_path.write_text(json.dumps(output, indent=2))
-    print(f"\nFull results written to {out_path.resolve()}")
+    # Final save with metrics
+    _save_progress(out_path, LLM_MODEL_ANSWERER, items, ragas_dict, page_hit_rate)
+    print(f"\nFull results saved to {out_path.resolve()}")
 
 
 if __name__ == "__main__":
