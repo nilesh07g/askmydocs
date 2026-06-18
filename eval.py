@@ -292,7 +292,7 @@ def evaluate_pdf(pdf_path: str):
         print(f"      intent={out['route_info']['intent']}  pages={retrieved_pages}")
         preview = out["answer"][:120].strip()
         print(f"      answer: {preview}{'...' if len(out['answer']) > 120 else ''}")
-        print(f"      → saved {len(items)}/{len(GOLDEN_SET)} to {out_path.name}\n")
+        print(f"      -> saved {len(items)}/{len(GOLDEN_SET)} to {out_path.name}\n")
 
         # 13s between calls keeps us under Gemini 2.5 Flash's free-tier 5 RPM
         # limit (5 RPM = one call every 12s minimum). 13s gives 1s of headroom.

@@ -112,15 +112,25 @@ The Groq Llama-3.1-8B router stays (cheap intent classification). Only the answe
 - [x] **RAGAS evaluation harness** — `eval.py` with real 10-question golden set for `docs/test.pdf` (gitignored). Judge runs on 8B (free tier budget).
 - [x] **Ran RAGAS, recorded scores, surfaced a real bug.** See findings below.
 
-### 📊 RAGAS findings on `docs/test.pdf` (10-Q golden set, 2026-06-02)
+### 📊 RAGAS findings — Gemini 2.5 Flash answerer (10-Q golden set, 2026-06-18)
+
+| Metric | Score | Δ vs Llama 3.3 70B (2026-06-02) | Interpretation |
+|---|---|---|---|
+| Context recall | **1.00** | — (unchanged) | Retrieval pulls every ground-truth fact into the top-K |
+| Faithfulness | **0.67** | **+0.35 (2.1×)** | Claims grounded in passages — DOUBLED after model swap |
+| Answer relevancy | **0.60** | **+0.28 (1.9×)** | Answer addresses the question asked — nearly doubled |
+| Page-hit rate | **83%** | -3pp (variance, small sample) | 5/6 fact-checkable questions retrieved the cited page |
+| Context precision | NaN | (judge timeout, both runs) | RAGAS tooling quirk on Groq judge — not a model issue |
+
+### Previous (Llama 3.3 70B, 2026-06-02) — kept for the before/after story
 
 | Metric | Score | Interpretation |
 |---|---|---|
-| Context recall | **1.00** | Retrieval pulled every ground-truth fact into the top-K |
-| Context precision | **0.67** | 2/3 of retrieved chunks are directly useful per question |
-| Page-hit rate | **86%** | 6/7 fact-checkable questions retrieved the cited page |
-| Faithfulness | 0.32 | ⚠️ Half the LLM's claims are not grounded in passages |
-| Answer relevancy | 0.32 | ⚠️ Answerer drifts off-topic on biographical questions |
+| Context recall | 1.00 | Retrieval was always good |
+| Context precision | 0.67 | (one-time successful judge run) |
+| Page-hit rate | 86% | Retrieval was always good |
+| Faithfulness | 0.32 | ⚠️ Half the LLM's claims weren't grounded |
+| Answer relevancy | 0.32 | ⚠️ Answerer drifted on biographical questions |
 
 **The story the numbers tell:** the retrieval pipeline (hybrid BM25+vector → RRF → cross-encoder rerank) works very well — almost all relevant content makes it to the LLM. The answerer LLM (Llama 3.3 70B at temp 0.0) is the weak link: it grounds factual questions like "what does the author say about losing friends?" perfectly, but on biographical questions ("who is the author?", "what other book?") it generates plausible-sounding parametric content like "2 million Instagram followers" that does not appear in the document.
 
@@ -141,8 +151,8 @@ The Groq Llama-3.1-8B router stays (cheap intent classification). Only the answe
 ### ⏭️ Tier-2 follow-up: switch answerer model
 - [ ] **Swap answerer LLM to Claude Haiku 3.5 or GPT-4o-mini.** Llama 3.3 70B's parametric drift on bio queries is the bottleneck. Stronger instruction-following models (Anthropic / OpenAI) should grounded RAG much better. Estimated ~30 min code change + free trial credit covers it.
 
-**Resume bullet (honest, defensible in interviews):**
-> Built a production-grade RAG pipeline (hybrid retrieval BM25+dense via RRF, cross-encoder reranking, agentic 8B/70B routing, token streaming, embedding cache) and instrumented it end-to-end with **LangSmith observability**. Evaluated with **RAGAS** on a 10-question golden set: **context recall 1.00, context precision 0.67, page-hit rate 86%**. Trace-driven analysis surfaced a Llama-3.3 70B grounding limitation on biographical queries; documented as a Tier-2 model-swap follow-up. Five prompt redesigns and a structured analysis of LLM input-shape-mirroring behaviors recorded as engineering artifacts.
+**Resume bullet (current — Gemini answerer + completed eval, 2026-06-18):**
+> Built a production-grade RAG pipeline (hybrid retrieval BM25+dense via RRF, cross-encoder reranking, agentic 8B-router + Gemini-2.5-Flash answerer, token streaming, on-disk embedding cache) and instrumented it end-to-end with **LangSmith observability** (dev + prod project separation). Evaluated with **RAGAS** on a 10-question golden set: **context recall 1.00, faithfulness 0.67, answer relevancy 0.60, page-hit rate 83%**. Trace-driven analysis diagnosed a base-model grounding limitation in the original Llama-3.3-70B answerer and resolved it via provider swap — doubling faithfulness from 0.32 to 0.67.
 
 ### 🥈 Tier 2 — Strong differentiators (~6–8 hrs, pick 1–2)
 
