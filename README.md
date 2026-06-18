@@ -51,7 +51,7 @@ App opens at `http://localhost:8501`.
 
 ## 📊 Evaluation
 
-The eval harness uses [RAGAS](https://docs.ragas.io) to compute industry-standard RAG metrics — faithfulness, answer relevancy, context precision, context recall — against a 10-question golden set.
+The eval harness uses [RAGAS](https://docs.ragas.io) to compute industry-standard RAG metrics — faithfulness, answer relevancy, context precision, context recall — against a 10-question golden set covering factual lookup, thematic synthesis, multi-hop reasoning, specific-quote retrieval, and out-of-scope ("don't-know") questions.
 
 ```bash
 # Install eval-only dependencies (kept separate from the main app deps)
@@ -61,7 +61,22 @@ pip install -r requirements-eval.txt
 python eval.py path/to/test.pdf
 ```
 
-Edit `GOLDEN_SET` in `eval.py` to match your test document.
+Edit `GOLDEN_SET` in `eval.py` to match your test document. Results stream to `eval_results.json` after each question (incremental writes), so a mid-run failure preserves prior work and re-running the script resumes from the next unanswered question.
+
+### Latest scores (10-question golden set, `docs/test.pdf`)
+
+| Metric | Score | What it measures |
+|---|---|---|
+| **Context recall** | **1.00** | Did retrieval pull every ground-truth fact into the top-K? |
+| **Faithfulness** | **0.67** | Are the LLM's claims supported by the retrieved passages? |
+| **Answer relevancy** | **0.60** | Does the answer address the question that was asked? |
+| **Page-hit rate** | **83%** (5/6) | For fact-checkable questions, did retrieval hit the cited page? |
+
+Context precision returned NaN due to Groq judge timeouts on a subset of evaluation calls — a tooling quirk, not a model issue.
+
+### Critical out-of-scope test passes
+Question: *"What university did the author attend?"* (no answer exists in the PDF).
+Model response: *"The passages I have access to don't cover that."* — exactly the failure-mode behavior we want, no hallucination.
 
 ## 📁 Project structure
 
