@@ -14,7 +14,7 @@ The two-day bio-hallucination saga is closed. Three layered fixes on branch `fix
 2. **Stop sequences** — Groq `stop=['</context>', '<context>', '</question>', '<question>']` prevents the model from inventing fake follow-up Q&A blocks in XML format.
 3. **Answerer model swap** — Groq Llama-3.3-70B → Google Gemini 2.5 Flash. Llama exhibited parametric drift on biographical queries that prompt engineering could not fix; Gemini grounds correctly on identical inputs.
 
-The Groq Llama-3.1-8B router stays (cheap intent classification). Only the answerer call moved providers.
+The Groq GPT OSS 20B router stays (cheap intent classification). Only the answerer call moved providers.
 
 ### Production observability
 - **Local dev traces** flow to LangSmith project `askmydocs-dev`
@@ -104,7 +104,7 @@ The Groq Llama-3.1-8B router stays (cheap intent classification). Only the answe
 
 ### ⚙️ Tier 1 — High resume ROI ✅ DONE (merged to main 2026-05-28)
 
-- [x] **Right-size models: 8B router + 70B answerer** — `LLM_MODEL_ROUTER = llama-3.1-8b-instant`, `LLM_MODEL_ANSWERER = llama-3.3-70b-versatile`. Faster routing, ~3x daily token budget.
+- [x] **Right-size models: 8B router + 70B answerer** — `LLM_MODEL_ROUTER = gpt-oss-20b`, `LLM_MODEL_ANSWERER = llama-3.3-70b-versatile`. Faster routing, ~3x daily token budget.
 - [x] **Streaming responses** — Groq `stream=True` + `st.write_stream`. Tokens appear live.
 - [x] **Hybrid retrieval — BM25 + vector + RRF** — `rag/hybrid.py`. BM25 + dense fused via Reciprocal Rank Fusion (k=60).
 - [x] **Cross-encoder reranking** — `rag/rerank.py`. `cross-encoder/ms-marco-MiniLM-L-6-v2`. Retrieves top-20 → reranks to top-5/12.

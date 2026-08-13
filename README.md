@@ -4,7 +4,7 @@ A chat-with-PDF app built on RAG (Retrieval-Augmented Generation). Upload any PD
 
 **Live demo:** https://askmydocs-nilesh.streamlit.app/
 
-**Stack:** Python · Streamlit · Groq (Llama 3.1 8B router) · Google Gemini 2.5 Flash (answerer) · FAISS · BM25 · sentence-transformers · cross-encoder reranker · LangSmith · RAGAS · pdfplumber
+**Stack:** Python · Streamlit · Groq (GPT OSS 20B router) · Google Gemini 2.5 Flash (answerer) · FAISS · BM25 · sentence-transformers · cross-encoder reranker · LangSmith · RAGAS · pdfplumber
 
 ---
 
